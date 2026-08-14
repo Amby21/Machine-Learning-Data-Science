@@ -36,6 +36,7 @@ jobs:
               \"max_tokens\": 500,
               \"messages\": [{\"role\": \"user\", \"content\": \"Review this code diff for hardcoded secrets, potential PHI/PII exposure, and risky changes. Be concise. Diff:\n\n$DIFF_CONTENT\"}]
             }")
+          echo "RAW RESPONSE: $RESPONSE"
           echo "$RESPONSE" | jq -r '.content[0].text' > review.txt
           cat review.txt
 
