@@ -32,6 +32,8 @@ jobs:
             max_tokens: 500,
             messages: [{role: "user", content: ("Review this code diff for hardcoded secrets, potential PHI/PII exposure, and risky changes. Be concise. Diff:\n\n" + $diff)}]
           }')
+          echo "PAYLOAD LENGTH: ${#PAYLOAD}"
+          echo "PAYLOAD CONTENT: $PAYLOAD"
           RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
