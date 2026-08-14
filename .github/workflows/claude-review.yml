@@ -63,7 +63,15 @@ jobs:
             exit 1
           fi
 
-          echo "$RESPONSE" | jq -r '.content[0].text' > review.txt
+          TEXT=$(echo "$RESPONSE" | jq -r '[.content[]? | select(.type=="text") | .text] | join("\n\n")')
+
+          if [ -z "$TEXT" ] || [ "$TEXT" = "null" ]; then
+            echo "Claude response had no text content. Raw response for debugging:"
+            echo "$RESPONSE"
+            TEXT="_Claude review unavailable: unexpected API response shape. Check the Actions log for the raw response._"
+          fi
+
+          echo "$TEXT" > review.txt
           cat review.txt
 
       - name: Post review as PR comment
