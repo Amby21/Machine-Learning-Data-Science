@@ -32,7 +32,7 @@ jobs:
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
             -d "{
-              \"model\": \"claude-sonnet-4-6\",
+              \"model\": \"claude-sonnet-5\",
               \"max_tokens\": 500,
               \"messages\": [{\"role\": \"user\", \"content\": \"Review this code diff for hardcoded secrets, potential PHI/PII exposure, and risky changes. Be concise. Diff:\n\n$DIFF_CONTENT\"}]
             }")
