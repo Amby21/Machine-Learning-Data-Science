@@ -26,22 +26,43 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          DIFF_CONTENT=$(cat diff.txt | head -c 8000)
-          jq -n --arg diff "$DIFF_CONTENT" '{
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY is empty. If this workflow runs on a fork PR, GitHub withholds secrets from it by default."
+            exit 1
+          fi
+
+          # Drop any invalid UTF-8 bytes, then let jq (codepoint-aware) truncate
+          # the string. Byte-level truncation (e.g. `head -c`) can split a
+          # multi-byte UTF-8 character, which breaks jq --arg and results in an
+          # empty/invalid payload.json being sent to the API.
+          iconv -f utf-8 -t utf-8 -c diff.txt > diff_clean.txt 2>/dev/null || cp diff.txt diff_clean.txt
+
+          jq -n --rawfile diff diff_clean.txt '{
             model: "claude-sonnet-5",
             max_tokens: 500,
-            messages: [{role: "user", content: ("Review this code diff for hardcoded secrets, potential PHI/PII exposure, and risky changes. Be concise. Diff:\n\n" + $diff)}]
+            messages: [{role: "user", content: ("Review this code diff for hardcoded secrets, potential PHI/PII exposure, and risky changes. Be concise. Diff:\n\n" + ($diff[0:8000]))}]
           }' > payload.json
-          echo "FILE SIZE CHECK:"
-          wc -c payload.json
-          echo "API KEY LENGTH: ${#ANTHROPIC_API_KEY}"
-          RESPONSE=$(curl -v -s https://api.anthropic.com/v1/messages \
+
+          if ! jq empty payload.json 2>/dev/null; then
+            echo "Failed to build a valid JSON payload:"
+            cat payload.json
+            exit 1
+          fi
+
+          HTTP_RESPONSE=$(curl -s -w '\nHTTP_STATUS:%{http_code}' https://api.anthropic.com/v1/messages \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -H "content-type: application/json" \
-            -H "Expect:" \
             --data-binary @payload.json)
-          echo "RAW RESPONSE: $RESPONSE"
+
+          HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -1 | cut -d: -f2)
+          RESPONSE=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Claude API call failed with status $HTTP_STATUS: $RESPONSE"
+            exit 1
+          fi
+
           echo "$RESPONSE" | jq -r '.content[0].text' > review.txt
           cat review.txt
 
