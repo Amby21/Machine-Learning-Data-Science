@@ -1,0 +1,88 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        id: diff
+        run: |
+          git diff origin/${{ github.base_ref }} origin/${{ github.head_ref }} > diff.txt
+          echo "Diff captured"
+
+      - name: Ask Claude to review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY is empty. If this workflow runs on a fork PR, GitHub withholds secrets from it by default."
+            exit 1
+          fi
+
+          # Drop any invalid UTF-8 bytes, then let jq (codepoint-aware) truncate
+          # the string. Byte-level truncation (e.g. `head -c`) can split a
+          # multi-byte UTF-8 character, which breaks jq --arg and results in an
+          # empty/invalid payload.json being sent to the API.
+          iconv -f utf-8 -t utf-8 -c diff.txt > diff_clean.txt 2>/dev/null || cp diff.txt diff_clean.txt
+
+          jq -n --rawfile diff diff_clean.txt '{
+            model: "claude-sonnet-5",
+            max_tokens: 500,
+            messages: [{role: "user", content: ("Review this code diff for hardcoded secrets, potential PHI/PII exposure, and risky changes. Be concise. Diff:\n\n" + ($diff[0:8000]))}]
+          }' > payload.json
+
+          if ! jq empty payload.json 2>/dev/null; then
+            echo "Failed to build a valid JSON payload:"
+            cat payload.json
+            exit 1
+          fi
+
+          HTTP_RESPONSE=$(curl -s -w '\nHTTP_STATUS:%{http_code}' https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            --data-binary @payload.json)
+
+          HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -1 | cut -d: -f2)
+          RESPONSE=$(echo "$HTTP_RESPONSE" | sed '$d')
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Claude API call failed with status $HTTP_STATUS: $RESPONSE"
+            exit 1
+          fi
+
+          TEXT=$(echo "$RESPONSE" | jq -r '[.content[]? | select(.type=="text") | .text] | join("\n\n")')
+
+          if [ -z "$TEXT" ] || [ "$TEXT" = "null" ]; then
+            echo "Claude response had no text content. Raw response for debugging:"
+            echo "$RESPONSE"
+            TEXT="_Claude review unavailable: unexpected API response shape. Check the Actions log for the raw response._"
+          fi
+
+          echo "$TEXT" > review.txt
+          cat review.txt
+
+      - name: Post review as PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const review = fs.readFileSync('review.txt', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `**Claude Review:**\n\n${review}`
+            });
